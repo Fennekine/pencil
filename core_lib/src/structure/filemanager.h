@@ -22,6 +22,8 @@ GNU General Public License for more details.
 #include <QObject>
 #include <QString>
 #include <QDomElement>
+#include <QImage>
+#include <QPoint>
 #include "log.h"
 #include "pencildef.h"
 #include "pencilerror.h"
@@ -32,6 +34,16 @@ class Object;
 class ObjectData;
 class QDir;
 
+struct BitmapFrameSaveOverride
+{
+    int layerId = -1;
+    int framePosition = -1;
+    QPoint topLeft;
+    QImage image;
+    qreal opacity = 1.0;
+    bool createsKeyFrame = false;
+};
+
 
 class FileManager : public QObject
 {
@@ -41,8 +53,8 @@ public:
     FileManager(QObject* parent = 0);
 
     Object* load(const QString& sFilenNme);
-    Status  save(const Object*, const QString& sFileName);
-    Status  writeToWorkingFolder(const Object*);
+    Status  save(const Object*, const QString& sFileName, const BitmapFrameSaveOverride* bitmapOverride = nullptr);
+    Status  writeToWorkingFolder(const Object*, const BitmapFrameSaveOverride* bitmapOverride = nullptr);
 
     QList<ColorRef> loadPaletteFile(QString strFilename);
     Status error() const { return mError; }
@@ -63,8 +75,10 @@ private:
     bool loadObjectOldWay(Object*, const QDomElement& root);
     bool isArchiveFormat(const QString& fileName) const;
     bool loadPalette(Object*);
-    Status writeKeyFrameFiles(const Object* obj, const QString& dataFolder, QStringList& filesWritten);
-    Status writeMainXml(const Object* obj, const QString& mainXmlPath, QStringList& filesWritten);
+    Status writeKeyFrameFiles(const Object* obj, const QString& dataFolder, QStringList& filesWritten,
+                              const BitmapFrameSaveOverride* bitmapOverride, bool* bitmapOverrideSaved);
+    Status writeMainXml(const Object* obj, const QString& mainXmlPath, QStringList& filesWritten,
+                        const BitmapFrameSaveOverride* bitmapOverride);
     Status writePalette(const Object* obj, const QString& dataFolder, QStringList& filesWritten);
 
     ObjectData loadProjectData(const QDomElement& element);

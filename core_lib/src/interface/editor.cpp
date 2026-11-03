@@ -1027,6 +1027,62 @@ void Editor::prepareSave()
     }
 }
 
+bool Editor::createBitmapSaveOverride(BitmapFrameSaveOverride& bitmapOverride) const
+{
+    Layer* currentLayer = layers()->currentLayer();
+    SelectionManager* selection = select();
+    if (currentLayer == nullptr || currentLayer->type() != Layer::BITMAP ||
+        !selection->somethingSelected() || selection->selectionTransform().isIdentity() ||
+        selection->mySelectionRect().isEmpty())
+    {
+        return false;
+    }
+
+    auto bitmapLayer = static_cast<LayerBitmap*>(currentLayer);
+    BitmapImage* source = bitmapLayer->getLastBitmapImageAtFrame(currentFrame());
+    if (source == nullptr)
+    {
+        return false;
+    }
+
+    bool createsKeyFrame = false;
+    if (currentLayer->getKeyFrameAt(currentFrame()) == nullptr)
+    {
+        const int action = preference()->getInt(SETTING::DRAW_ON_EMPTY_FRAME_ACTION);
+        if (action == DUPLICATE_PREVIOUS_KEY)
+        {
+            createsKeyFrame = true;
+        }
+        else if (action != KEEP_DRAWING_ON_PREVIOUS_KEY)
+        {
+            return false;
+        }
+    }
+
+    BitmapImage snapshot = source->copy();
+    BitmapImage transformed = snapshot.transformed(selection->mySelectionRect().toRect(),
+                                                    selection->selectionTransform(),
+                                                    tools()->getTool(ToolType::MOVE)->toolProperties()
+                                                        .getInfo(TransformToolProperties::ANTI_ALIASING_ENABLED)
+                                                        .boolValue());
+    snapshot.clear(selection->mySelectionRect());
+    snapshot.paste(&transformed, QPainter::CompositionMode_SourceOver);
+
+    QImage snapshotImage = *snapshot.image();
+    if (snapshotImage.isNull())
+    {
+        return false;
+    }
+
+    bitmapOverride.layerId = currentLayer->id();
+    bitmapOverride.framePosition = createsKeyFrame ? currentFrame() : source->pos();
+    bitmapOverride.topLeft = snapshot.topLeft();
+    bitmapOverride.image = snapshotImage;
+    bitmapOverride.opacity = source->getOpacity();
+    bitmapOverride.createsKeyFrame = createsKeyFrame;
+    return true;
+}
+
 void Editor::clearCurrentFrame()
 {
     mScribbleArea->clearImage();

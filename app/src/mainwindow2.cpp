@@ -156,7 +156,9 @@ MainWindow2::MainWindow2(QWidget* parent) :
 void MainWindow2::autoSaveTimeout()
 {
     FileManager fm;
-    fm.writeToWorkingFolder(mEditor->object());
+    BitmapFrameSaveOverride bitmapOverride;
+    const bool hasBitmapOverride = mEditor->createBitmapSaveOverride(bitmapOverride);
+    fm.writeToWorkingFolder(mEditor->object(), hasBitmapOverride ? &bitmapOverride : nullptr);
 }
 
 MainWindow2::~MainWindow2()
@@ -803,6 +805,8 @@ bool MainWindow2::saveObject(QString strSavedFileName)
     mEditor->prepareSave();
 
     FileManager fm(this);
+    BitmapFrameSaveOverride bitmapOverride;
+    const bool hasBitmapOverride = mEditor->createBitmapSaveOverride(bitmapOverride);
 
     connect(&fm, &FileManager::progressChanged, [&progress](int p)
     {
@@ -814,7 +818,8 @@ bool MainWindow2::saveObject(QString strSavedFileName)
         progress.setRange(0, max + 3);
     });
 
-    Status st = fm.save(mEditor->object(), strSavedFileName);
+    Status st = fm.save(mEditor->object(), strSavedFileName,
+                        hasBitmapOverride ? &bitmapOverride : nullptr);
 
 
     if (!st.ok())
