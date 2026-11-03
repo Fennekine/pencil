@@ -401,6 +401,72 @@ TEST_CASE("FileManager File-saving")
     }
 }
 
+TEST_CASE("FileManager saves bitmap frame overrides")
+{
+    QTemporaryDir tempDir("PENCIL_TEST_XXXXXXXX");
+    REQUIRE(tempDir.isValid());
+
+    Object object;
+    object.init();
+    LayerBitmap* layer = object.addNewBitmapLayer();
+
+    QImage originalImage(QSize(3, 3), QImage::Format_ARGB32_Premultiplied);
+    originalImage.fill(Qt::red);
+    BitmapImage originalBitmap(QPoint(4, 5), originalImage);
+    originalBitmap.setPos(1);
+    layer->replaceKeyFrame(&originalBitmap);
+
+    const QString projectPath = tempDir.filePath("bitmap-override.pclx");
+    FileManager fileManager;
+
+    BitmapFrameSaveOverride bitmapOverride;
+    bitmapOverride.layerId = layer->id();
+    bitmapOverride.framePosition = 1;
+    bitmapOverride.topLeft = QPoint(12, 14);
+    bitmapOverride.image = QImage(QSize(2, 2), QImage::Format_ARGB32_Premultiplied);
+    bitmapOverride.image.fill(Qt::blue);
+
+    REQUIRE(fileManager.save(&object, projectPath, &bitmapOverride).ok());
+    REQUIRE(layer->getBitmapImageAtFrame(1)->topLeft() == QPoint(4, 5));
+    REQUIRE(layer->getBitmapImageAtFrame(1)->pixel(QPoint(4, 5)) == qRgb(255, 0, 0));
+
+    Object* loadedObject = fileManager.load(projectPath);
+    REQUIRE(loadedObject != nullptr);
+    LayerBitmap* loadedLayer = loadedObject == nullptr
+                                   ? nullptr
+                                   : dynamic_cast<LayerBitmap*>(loadedObject->findLayerById(layer->id()));
+    REQUIRE(loadedLayer != nullptr);
+    if (loadedLayer != nullptr)
+    {
+        BitmapImage* loadedFrame = loadedLayer->getBitmapImageAtFrame(1);
+        REQUIRE(loadedFrame->topLeft() == QPoint(12, 14));
+        REQUIRE(loadedFrame->image()->pixel(QPoint(0, 0)) == qRgb(0, 0, 255));
+    }
+    delete loadedObject;
+
+    bitmapOverride.framePosition = 2;
+    bitmapOverride.topLeft = QPoint(20, 22);
+    bitmapOverride.image.fill(Qt::green);
+    bitmapOverride.createsKeyFrame = true;
+    REQUIRE(fileManager.save(&object, projectPath, &bitmapOverride).ok());
+
+    loadedObject = fileManager.load(projectPath);
+    REQUIRE(loadedObject != nullptr);
+    loadedLayer = loadedObject == nullptr
+                      ? nullptr
+                      : dynamic_cast<LayerBitmap*>(loadedObject->findLayerById(layer->id()));
+    REQUIRE(loadedLayer != nullptr);
+    if (loadedLayer != nullptr)
+    {
+        REQUIRE(loadedLayer->getBitmapImageAtFrame(1)->image()->pixel(QPoint(0, 0)) == qRgb(255, 0, 0));
+        BitmapImage* duplicatedFrame = loadedLayer->getBitmapImageAtFrame(2);
+        REQUIRE(duplicatedFrame != nullptr);
+        REQUIRE(duplicatedFrame->topLeft() == QPoint(20, 22));
+        REQUIRE(duplicatedFrame->image()->pixel(QPoint(0, 0)) == qRgb(0, 255, 0));
+    }
+    delete loadedObject;
+}
+
 TEST_CASE("Empty Sound Frames")
 {
     SECTION("Invalid src value")

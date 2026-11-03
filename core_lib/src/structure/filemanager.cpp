@@ -25,6 +25,8 @@ GNU General Public License for more details.
 #include "fileformat.h"
 #include "object.h"
 #include "layercamera.h"
+#include "layerbitmap.h"
+#include "bitmapimage.h"
 #include "util.h"
 
 FileManager::FileManager(QObject* parent) : QObject(parent)
@@ -233,7 +235,8 @@ bool FileManager::isArchiveFormat(const QString& fileName) const
     return true;
 }
 
-Status FileManager::save(const Object* object, const QString& sFileName)
+Status FileManager::save(const Object* object, const QString& sFileName,
+                         const BitmapFrameSaveOverride* bitmapOverride)
 {
     DebugDetails dd;
     dd << "\n[Project SAVE diagnostics]\n";
@@ -330,10 +333,13 @@ Status FileManager::save(const Object* object, const QString& sFileName)
     }
 
     QStringList filesToZip; // A files list in the working folder needs to be zipped
-    Status stKeyFrames = writeKeyFrameFiles(object, sDataFolder, filesToZip);
+    bool bitmapOverrideSaved = false;
+    Status stKeyFrames = writeKeyFrameFiles(object, sDataFolder, filesToZip,
+                                            bitmapOverride, &bitmapOverrideSaved);
     dd.collect(stKeyFrames.details());
 
-    Status stMainXml = writeMainXml(object, sMainXMLFile, filesToZip);
+    Status stMainXml = writeMainXml(object, sMainXMLFile, filesToZip,
+                                    bitmapOverrideSaved ? bitmapOverride : nullptr);
     dd.collect(stMainXml.details());
 
     Status stPalette = writePalette(object, sDataFolder, filesToZip);
@@ -389,7 +395,8 @@ Status FileManager::save(const Object* object, const QString& sFileName)
     return Status::OK;
 }
 
-Status FileManager::writeToWorkingFolder(const Object* object)
+Status FileManager::writeToWorkingFolder(const Object* object,
+                                         const BitmapFrameSaveOverride* bitmapOverride)
 {
     DebugDetails dd;
 
@@ -398,10 +405,13 @@ Status FileManager::writeToWorkingFolder(const Object* object)
     const QString dataFolder = object->dataDir();
     const QString mainXml = object->mainXMLFile();
 
-    Status stKeyFrames = writeKeyFrameFiles(object, dataFolder, filesWritten);
+    bool bitmapOverrideSaved = false;
+    Status stKeyFrames = writeKeyFrameFiles(object, dataFolder, filesWritten,
+                                            bitmapOverride, &bitmapOverrideSaved);
     dd.collect(stKeyFrames.details());
 
-    Status stMainXml = writeMainXml(object, mainXml, filesWritten);
+    Status stMainXml = writeMainXml(object, mainXml, filesWritten,
+                                    bitmapOverrideSaved ? bitmapOverride : nullptr);
     dd.collect(stMainXml.details());
 
     Status stPalette = writePalette(object, dataFolder, filesWritten);
@@ -653,13 +663,48 @@ bool FileManager::loadPalette(Object* obj)
     return true;
 }
 
-Status FileManager::writeKeyFrameFiles(const Object* object, const QString& dataFolder, QStringList& filesFlushed)
+Status FileManager::writeKeyFrameFiles(const Object* object, const QString& dataFolder,
+                                       QStringList& filesFlushed,
+                                       const BitmapFrameSaveOverride* bitmapOverride,
+                                       bool* bitmapOverrideSaved)
 {
+    if (bitmapOverrideSaved != nullptr)
+    {
+        *bitmapOverrideSaved = false;
+    }
+
     DebugDetails dd;
     dd << "\n[Keyframes WRITE diagnostics]\n";
 
     const int numLayers = object->getLayerCount();
     dd << QString("Total layer count: %1").arg(numLayers);
+
+    LayerBitmap* overrideLayer = nullptr;
+    BitmapImage* overrideFrame = nullptr;
+    QString overridePath;
+    if (bitmapOverride != nullptr)
+    {
+        Layer* layer = object->findLayerById(bitmapOverride->layerId);
+        if (layer == nullptr || layer->type() != Layer::BITMAP ||
+            bitmapOverride->image.isNull())
+        {
+            dd << "Error: Invalid bitmap frame save override";
+            return Status(Status::INVALID_ARGUMENT, dd);
+        }
+
+        overrideLayer = static_cast<LayerBitmap*>(layer);
+        overrideFrame = overrideLayer->getBitmapImageAtFrame(bitmapOverride->framePosition);
+        if (bitmapOverride->createsKeyFrame == (overrideFrame != nullptr))
+        {
+            dd << QString("Error: Bitmap frame %1 has an unexpected keyframe state in layer %2")
+                      .arg(bitmapOverride->framePosition)
+                      .arg(bitmapOverride->layerId);
+            return Status(Status::INVALID_ARGUMENT, dd);
+        }
+
+        overridePath = QDir(dataFolder).filePath(
+            QString::asprintf("%03d.%03d.png", bitmapOverride->layerId, bitmapOverride->framePosition));
+    }
 
     for (int i = 0; i < numLayers; ++i)
     {
@@ -681,6 +726,29 @@ Status FileManager::writeKeyFrameFiles(const Object* object, const QString& data
             dd.collect(st.details());
             dd << QString("\nError: Failed to save Layer[%1] %2").arg(i).arg(layer->name());
         }
+        else if (layer == overrideLayer)
+        {
+            if (!bitmapOverride->image.save(overridePath, "PNG"))
+            {
+                saveLayersOK = false;
+                dd << QString("Error: Failed to save transformed bitmap frame to %1").arg(overridePath);
+            }
+            else
+            {
+                if (overrideFrame != nullptr)
+                {
+                    overrideFrame->setModified(true);
+                }
+                if (bitmapOverrideSaved != nullptr)
+                {
+                    *bitmapOverrideSaved = true;
+                }
+                if (!filesFlushed.contains(overridePath))
+                {
+                    filesFlushed.append(overridePath);
+                }
+            }
+        }
     }
 
     progressForward();
@@ -696,7 +764,9 @@ Status FileManager::writeKeyFrameFiles(const Object* object, const QString& data
     return Status(errorCode, dd);
 }
 
-Status FileManager::writeMainXml(const Object* object, const QString& mainXmlPath, QStringList& filesWritten)
+Status FileManager::writeMainXml(const Object* object, const QString& mainXmlPath,
+                                 QStringList& filesWritten,
+                                 const BitmapFrameSaveOverride* bitmapOverride)
 {
     DebugDetails dd;
     dd << "\n[XML WRITE diagnostics]\n";
@@ -725,6 +795,53 @@ Status FileManager::writeMainXml(const Object* object, const QString& mainXmlPat
 
     // save object
     QDomElement objectElement = object->saveXML(xmlDoc);
+    if (bitmapOverride != nullptr)
+    {
+        bool overrideWritten = false;
+        for (QDomNode layerNode = objectElement.firstChild(); !layerNode.isNull(); layerNode = layerNode.nextSibling())
+        {
+            QDomElement layerElement = layerNode.toElement();
+            if (layerElement.tagName() != "layer" ||
+                layerElement.attribute("id").toInt() != bitmapOverride->layerId)
+            {
+                continue;
+            }
+
+            if (bitmapOverride->createsKeyFrame)
+            {
+                QDomElement imageElement = xmlDoc.createElement("image");
+                imageElement.setAttribute("frame", bitmapOverride->framePosition);
+                imageElement.setAttribute(
+                    "src", QString::asprintf("%03d.%03d.png", bitmapOverride->layerId, bitmapOverride->framePosition));
+                imageElement.setAttribute("topLeftX", bitmapOverride->topLeft.x());
+                imageElement.setAttribute("topLeftY", bitmapOverride->topLeft.y());
+                imageElement.setAttribute("opacity", bitmapOverride->opacity);
+                layerElement.appendChild(imageElement);
+                overrideWritten = true;
+                break;
+            }
+
+            for (QDomNode imageNode = layerElement.firstChild(); !imageNode.isNull(); imageNode = imageNode.nextSibling())
+            {
+                QDomElement imageElement = imageNode.toElement();
+                if (imageElement.tagName() == "image" &&
+                    imageElement.attribute("frame").toInt() == bitmapOverride->framePosition)
+                {
+                    imageElement.setAttribute("topLeftX", bitmapOverride->topLeft.x());
+                    imageElement.setAttribute("topLeftY", bitmapOverride->topLeft.y());
+                    overrideWritten = true;
+                    break;
+                }
+            }
+            break;
+        }
+
+        if (!overrideWritten)
+        {
+            dd << "Error: Bitmap frame save override was not found in project XML";
+            return Status(Status::FAIL, dd);
+        }
+    }
     root.appendChild(objectElement);
 
     // save Pencil2D version

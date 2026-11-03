@@ -64,6 +64,7 @@ class TimeLine;
 class UndoRedoCommand;
 class ActiveFramePool;
 class Layer;
+struct BitmapFrameSaveOverride;
 
 enum class SETTING;
 
@@ -110,6 +111,7 @@ public:
     Status setObject(Object* object);
     void updateObject();
     void prepareSave();
+    bool createBitmapSaveOverride(BitmapFrameSaveOverride& bitmapOverride) const;
 
     void setScribbleArea(ScribbleArea* pScirbbleArea) { mScribbleArea = pScirbbleArea; }
     ScribbleArea* getScribbleArea() { return mScribbleArea; }
